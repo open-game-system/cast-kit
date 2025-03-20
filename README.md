@@ -4,7 +4,7 @@
 
 Cast Kit is a TypeScript library for adding TV casting capabilities to web games. It transforms phones into controllers and TVs into displays, enabling immersive gameplay experiences on larger screens.
 
-[![npm version](https://img.shields.io/npm/v/@open-game-collective/cast-kit.svg?style=flat)](https://www.npmjs.com/package/@open-game-collective/cast-kit)
+[![npm version](https://img.shields.io/npm/v/@open-game-system/cast-kit.svg?style=flat)](https://www.npmjs.com/package/@open-game-system/cast-kit)
 [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](https://www.typescriptlang.org/)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -19,11 +19,12 @@ Cast Kit is a TypeScript library for adding TV casting capabilities to web games
 
 ## Architecture
 
-Cast Kit consists of three main components:
+Cast Kit is a client-side library that interfaces with the Open Game mobile app to provide casting capabilities. The architecture is simple:
 
-1. **Client SDK**: Runs in the player's browser and provides the API for initiating and managing cast sessions
-2. **Server SDK**: Runs on Cloudflare Workers and handles session management, communication, and coordination
-3. **Renderer Service**: Runs in Google Cloud Run and manages browser instances for streaming game content to TVs
+1. **Client SDK**: A React-based library that runs in the player's browser
+2. **Open Game App**: Handles the actual casting to Chromecast devices
+
+All server-side handling is managed through the Open Game infrastructure - no server implementation is required on your end.
 
 ```mermaid
 graph TD
@@ -32,14 +33,9 @@ graph TD
         GameUI[Game Interface]
     end
     
-    subgraph "Cloudflare Workers"
-        ServerSDK[Cast Kit Server SDK]
-        Workflow[Durable Workflow]
-    end
-    
-    subgraph "Google Cloud Run"
-        Renderer[Renderer Service]
-        Browser[Headless Browser]
+    subgraph "Open Game App"
+        NativeBridge[Native Bridge]
+        CastImplementation[Cast Implementation]
     end
     
     subgraph "User Devices"
@@ -48,309 +44,53 @@ graph TD
     end
     
     GameUI -->|Uses| ClientSDK
-    ClientSDK -->|API Calls| ServerSDK
-    ServerSDK -->|Creates| Workflow
-    Workflow -->|HTTP Calls| Renderer
-    Renderer -->|Launches| Browser
-    Browser -->|WebRTC Stream| TV
-    Phone -->|Control Input| ClientSDK
+    ClientSDK -->|WebView Communication| NativeBridge
+    NativeBridge -->|Controls| CastImplementation
+    CastImplementation -->|Streams to| TV
+    Phone -->|Control Input| GameUI
 ```
 
 ## Prerequisites
 
-- **Cloudflare Workers** account with Workflows enabled
-- **Google Cloud Run** access for the Renderer Service (or use our hosted service)
-- **Node.js** 18+ and npm/yarn
-- **TypeScript** 4.5+ (recommended)
+- **React-based** web application
+- **Modern browser** support
+- Players use the **Open Game App** for casting
 
 ## Quick Start
 
 ### 1. Install the package
 
 ```bash
-npm install @open-game-collective/cast-kit
+npm install @open-game-system/cast-kit
 ```
 
 ### 2. Client-Side Integration
 
 ```jsx
-import { createCastClient } from '@open-game-collective/cast-kit/client';
-import { CastButton } from '@open-game-collective/cast-kit/react';
+import { createCastClient } from '@open-game-system/cast-kit/client';
+import { CastButton } from '@open-game-system/cast-kit/react';
 
 // Create a client
-const castClient = createCastClient({
-  host: 'your-game-domain.com', // Your game's domain
-});
+const castClient = createCastClient();
 
 // In your React component
 function GameUI() {
-  return (
-    <div>
-      <h1>Your Game</h1>
-      <CastButton client={castClient} 
-                 gameUrl="https://triviajam.tv/cast?gameId=123&roomCode=ABCD" />
-    </div>
-  );
-}
-```
-
-### 3. Server-Side Integration (Cloudflare Workers)
-
-```typescript
-// wrangler.toml
-// [See Cloudflare Workers setup below]
-
-// src/worker.ts
-import { createCastRouter } from '@open-game-collective/cast-kit/server';
-import { createKVStorageHooks } from '@open-game-collective/cast-kit/server/storage';
-
-export interface Env {
-  CAST_SESSIONS: KVNamespace;
-  RENDER_HOST: string;
-  CAST_SESSION_WORKFLOW: any;
-}
-
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url);
-    
-    // Create storage hooks using Cloudflare KV
-    const storageHooks = createKVStorageHooks(env.CAST_SESSIONS);
-    
-    // Create the cast router
-    const castRouter = createCastRouter({
-      renderHost: env.RENDER_HOST,  // Renderer service host
-      storageHooks,
-      workflowBinding: env.CAST_SESSION_WORKFLOW  // Workflow binding
-    });
-    
-    // Handle cast routes
-    if (url.pathname.startsWith('/api/cast/')) {
-      return castRouter(request);
-    }
-    
-    return new Response('Not Found', { status: 404 });
-  }
-};
-```
-
-## Detailed Setup Guide
-
-### Client-Side Setup
-
-The client-side SDK manages cast sessions and provides a UI for the player to initiate and control casting.
-
-#### Basic Client Setup
-
-```typescript
-import { createCastClient } from '@open-game-collective/cast-kit/client';
-
-// Create a cast client
-const castClient = createCastClient({
-  host: 'triviajam.tv',  // Your game's domain
-});
-
-// Create a broadcast session
-async function startCasting() {
-  try {
-    // Generate a broadcast URL with game state
-    const broadcastUrl = new URL('https://triviajam.tv/cast');
-    broadcastUrl.searchParams.append('gameId', '123');
-    broadcastUrl.searchParams.append('roomCode', 'ABCD');
-    
-    // Start broadcasting
-    await castClient.createBroadcastSession({
-      gameUrl: broadcastUrl.toString()
-    });
-    
-    console.log('Started casting!');
-  } catch (error) {
-    console.error('Casting error:', error);
-  }
-}
-
-// End the session
-async function stopCasting() {
-  await castClient.endSession();
-  console.log('Stopped casting');
-}
-```
-
-#### React Integration
-
-Cast Kit provides React components and hooks for easy integration:
-
-```jsx
-import { 
-  createCastKitContext, 
-  CastButton, 
-  CastStatus 
-} from '@open-game-collective/cast-kit/react';
-import { createCastClient } from '@open-game-collective/cast-kit/client';
-
-// Create the context
-export const CastKitContext = createCastKitContext();
-
-// Create the client
-const castClient = createCastClient({
-  host: 'triviajam.tv'
-});
-
-// In your App component
-function App() {
-  return (
-    <CastKitContext.Provider client={castClient}>
-      <GameUI />
-    </CastKitContext.Provider>
-  );
-}
-
-// In your game UI component
-function GameUI() {
-  // Access client methods
-  const client = CastKitContext.useClient();
+  const gameId = "abc123"; 
+  const roomCode = "XYZ789";
   
-  // Subscribe to specific state
-  const isCasting = CastKitContext.useSelector(state => 
-    state.session?.status === 'active'
-  );
-  
-  // Create a URL with game state
-  const getBroadcastUrl = () => {
-    const url = new URL('https://triviajam.tv/cast');
-    url.searchParams.append('gameId', '123');
-    url.searchParams.append('roomCode', 'ABCD');
-    return url.toString();
-  };
-  
-  return (
-    <div>
-      <h1>Your Game</h1>
-      
-      {!isCasting ? (
-        <CastButton onCast={() => {
-          client.createBroadcastSession({
-            gameUrl: getBroadcastUrl()
-          });
-        }} />
-      ) : (
-        <div>
-          <CastStatus />
-          <button onClick={() => client.endSession()}>
-            Stop Casting
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-```
-
-### Server-Side Setup (Cloudflare Workers)
-
-The server-side component requires Cloudflare Workers with Workflows enabled.
-
-#### 1. Configure wrangler.toml
-
-```toml
-name = "your-game-cast-router"
-main = "src/worker.ts"
-compatibility_date = "2023-12-01"
-
-# KV Namespace for storing session data
-[[kv_namespaces]]
-binding = "CAST_SESSIONS"
-id = "your-kv-namespace-id"  # Create this in the Cloudflare dashboard
-
-# Environment variables
-[vars]
-RENDER_HOST = "https://renderer.triviajam.tv"  # Ask for access or host your own
-
-# Workflow definition
-[[workflows]]
-name = "cast-session-workflow"
-binding = "CAST_SESSION_WORKFLOW"
-```
-
-#### 2. Implement the Worker
-
-```typescript
-// src/worker.ts
-import { createCastRouter } from '@open-game-collective/cast-kit/server';
-import { createKVStorageHooks } from '@open-game-collective/cast-kit/server/storage';
-import { CastSessionWorkflow } from '@open-game-collective/cast-kit/server/workflows';
-
-export interface Env {
-  CAST_SESSIONS: KVNamespace;
-  RENDER_HOST: string;
-  CAST_SESSION_WORKFLOW: any;
-}
-
-// Export the workflow class for Cloudflare Workflows
-export { CastSessionWorkflow };
-
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url);
-    
-    // Create storage hooks using Cloudflare KV
-    const storageHooks = createKVStorageHooks(env.CAST_SESSIONS);
-    
-    // Create the cast router
-    const castRouter = createCastRouter({
-      renderHost: env.RENDER_HOST,
-      storageHooks,
-      workflowBinding: env.CAST_SESSION_WORKFLOW
-    });
-    
-    // Handle cast routes
-    if (url.pathname.startsWith('/api/cast/')) {
-      return castRouter(request);
-    }
-    
-    return new Response('Not Found', { status: 404 });
-  }
-};
-```
-
-#### 3. Deploy to Cloudflare
-
-```bash
-npx wrangler publish
-```
-
-### Broadcast Page
-
-The broadcast page is what viewers will see on the TV. This page should be optimized for TV display and connect to your game's state management system.
-
-```jsx
-// pages/cast.tsx or similar
-import { useEffect, useState } from 'react';
-import { useGameState } from '../hooks/useGameState';
-
-export default function CastPage() {
-  // Get game parameters from URL
-  const [params, setParams] = useState(null);
-  
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    setParams({
-      gameId: urlParams.get('gameId'),
-      roomCode: urlParams.get('roomCode')
+  // Initialize cast functionality
+  React.useEffect(() => {
+    castClient.signalReady({
+      gameId,
+      roomCode,
+      broadcastUrl: `https://yourgame.com/tv?gameId=${gameId}&roomCode=${roomCode}`
     });
   }, []);
   
-  // Connect to game state if we have params
-  const { gameState, loading, error } = useGameState(params?.gameId, params?.roomCode);
-  
-  if (!params) return <div>Loading...</div>;
-  if (loading) return <div>Connecting to game...</div>;
-  if (error) return <div>Error connecting to game: {error.message}</div>;
-  
   return (
-    <div className="tv-display">
-      {/* Game display optimized for TV */}
-      <GameDisplay gameState={gameState} isTvMode={true} />
+    <div>
+      <h1>Your Game</h1>
+      <CastButton client={castClient} />
     </div>
   );
 }
@@ -361,37 +101,115 @@ export default function CastPage() {
 ### Client SDK
 
 ```typescript
+// Create a client instance
+const client = createCastClient({ debug?: boolean });
+
+// Client interface
 interface CastClient {
-  // Create a new broadcast session
-  createBroadcastSession(options: {
-    gameUrl: string,      // URL to your game's broadcast page
-    sessionData?: any     // Optional data to include with the session
-  }): Promise<CastSession>;
-  
-  // Get the current session
-  getSession(): CastSession | null;
-  
-  // End the current session
-  endSession(): Promise<void>;
-  
   // Get the current state
   getState(): CastState;
   
   // Subscribe to state changes
   subscribe(listener: (state: CastState) => void): () => void;
+  
+  // Signal that the game is ready to cast
+  signalReady(params: SignalReadyParams): Promise<void>;
+  
+  // Scan for available cast devices
+  scanForDevices(): Promise<void>;
+  
+  // Start casting to a device
+  startCasting(deviceId: string, options?: CastOptions): Promise<void>;
+  
+  // Stop the current casting session
+  stopCasting(): Promise<void>;
+  
+  // Send a state update to the cast session
+  sendStateUpdate(state: Record<string, unknown>): Promise<void>;
+  
+  // Reset any error in the current state
+  resetError(): void;
+  
+  // Get the list of debug logs (if debug mode is enabled)
+  getLogs(): Array<{timestamp: number, type: string, message: string, data?: unknown}>;
 }
 
+// Parameters for signalReady method
+interface SignalReadyParams {
+  // Game identifier
+  gameId: string;
+  
+  // Room code (if applicable)
+  roomCode?: string;
+  
+  // URL to broadcast to the TV
+  broadcastUrl?: string;
+  
+  // List of game capabilities
+  capabilities?: string[];
+}
+
+// Options for starting a cast session
+interface CastOptions {
+  // Initial state to send to the cast session
+  initialState?: Record<string, unknown>;
+}
+
+// Cast state
 interface CastState {
-  isCreatingSession: boolean;
-  error: Error | null;
-  session: CastSession | null;
+  // Whether Cast SDK is available
+  isAvailable: boolean;
+  
+  // Whether a cast session is active
+  isCasting: boolean;
+  
+  // Whether a cast session is connecting
+  isConnecting: boolean;
+  
+  // Whether the client is scanning for devices
+  isScanning: boolean;
+  
+  // Name of the connected device (if any)
+  deviceName: string | null;
+  
+  // ID of the connected device (if any)
+  deviceId: string | null;
+  
+  // Current session ID (if any)
+  sessionId: string | null;
+  
+  // List of available cast devices
+  devices: CastDevice[];
+  
+  // Current error (if any)
+  error: CastError | null;
 }
 
-interface CastSession {
-  sessionId: string;
-  status: 'created' | 'connecting' | 'active' | 'error' | 'terminated';
-  createdAt: string;
-  error?: string;
+// Cast device representation
+interface CastDevice {
+  // Unique identifier for the device
+  id: string;
+  
+  // Human-readable name of the device
+  name: string;
+  
+  // Type of device (e.g., 'chromecast')
+  type: string;
+  
+  // Whether the device is currently connected
+  isConnected: boolean;
+}
+
+// Cast error representation
+interface CastError {
+  // Error code
+  code: string;
+  
+  // Error message
+  message: string;
+  
+  // Additional error details
+  details?: Record<string, unknown>;
 }
 ```
 
@@ -400,74 +218,91 @@ interface CastSession {
 ```typescript
 // CastButton props
 interface CastButtonProps {
-  onCast?: () => void;        // Called when the button is clicked
-  disabled?: boolean;         // Disable the button
-  className?: string;         // CSS class
-  label?: string;             // Button text
+  // Cast client instance (optional if using context)
+  client?: CastClient;
+  
+  // Called when the button is clicked
+  onCast?: () => void;        
+  
+  // Disable the button
+  disabled?: boolean;         
+  
+  // CSS class
+  className?: string;         
+  
+  // Button text
+  label?: string;             
 }
 
 // CastStatus props
 interface CastStatusProps {
-  className?: string;         // CSS class
-  showEndButton?: boolean;    // Show the "End Casting" button
-  onEnd?: () => void;         // Called when end button is clicked
+  // Cast client instance (optional if using context)
+  client?: CastClient;
+  
+  // CSS class
+  className?: string;         
+  
+  // Show the "End Casting" button
+  showEndButton?: boolean;    
+  
+  // Called when end button is clicked
+  onEnd?: () => void;         
 }
-```
-
-### Server SDK
-
-```typescript
-interface CastRouterOptions {
-  renderHost: string;         // URL to the Renderer service
-  storageHooks?: StorageHooks; // Custom storage implementation
-  workflowBinding: any;       // Cloudflare Workflow binding
-}
-
-// Create a router for handling cast requests
-function createCastRouter(options: CastRouterOptions): (request: Request) => Promise<Response>;
-
-// Create storage hooks using Cloudflare KV
-function createKVStorageHooks(namespace: KVNamespace): StorageHooks;
 ```
 
 ## Advanced Usage
 
-### Custom Storage
+### Custom UI
 
-Cast Kit uses Cloudflare KV by default, but you can implement custom storage:
+Cast Kit provides container components and hooks for building custom UIs:
 
 ```typescript
-import { StorageHooks } from '@open-game-collective/cast-kit/server';
+import { 
+  createCastKitContext, 
+  useCastSelector,
+  useCastClient 
+} from '@open-game-system/cast-kit/react';
 
-// Custom storage implementation
-const customStorage: StorageHooks = {
-  saveSession: async (session) => {
-    // Save session to your storage
-  },
-  
-  getSession: async (sessionId) => {
-    // Get session from your storage
-  },
-  
-  updateSession: async (sessionId, updates) => {
-    // Update session in your storage
-  },
-  
-  deleteSession: async (sessionId) => {
-    // Delete session from your storage
-  },
-  
-  listActiveSessions: async () => {
-    // List active sessions from your storage
-  }
-};
+// Create the context
+export const CastKitContext = createCastKitContext();
 
-// Use custom storage with the router
-const castRouter = createCastRouter({
-  renderHost: env.RENDER_HOST,
-  storageHooks: customStorage,
-  workflowBinding: env.CAST_SESSION_WORKFLOW
-});
+// Custom component
+function CustomCastButton() {
+  // Access client methods
+  const client = useCastClient();
+  
+  // Subscribe to specific state
+  const isCasting = useCastSelector(state => state.isCasting);
+  const deviceName = useCastSelector(state => state.deviceName);
+  
+  // Start the casting process
+  const handleCastClick = async () => {
+    if (isCasting) {
+      await client.stopCasting();
+    } else {
+      // First scan for devices
+      await client.scanForDevices();
+      
+      // User would select a device, then:
+      // For this example, we'll auto-select the first available device
+      const devices = client.getState().devices;
+      if (devices.length > 0) {
+        await client.startCasting(devices[0].id, {
+          initialState: {
+            gameState: "initializing",
+            playerCount: 1
+          }
+        });
+      }
+    }
+  };
+  
+  return (
+    <button onClick={handleCastClick}>
+      {isCasting ? `Stop Casting to ${deviceName}` : 'Cast to TV'}
+    </button>
+  );
+}
 ```
 
 ### Debugging
@@ -477,7 +312,6 @@ Cast Kit includes debugging tools to help troubleshoot cast issues:
 ```typescript
 // Enable verbose logging
 const castClient = createCastClient({
-  host: 'triviajam.tv',
   debug: true
 });
 
@@ -501,24 +335,39 @@ castClient.subscribe((state) => {
 - Optimize for 16:9 aspect ratio
 - Test on actual TV devices
 
-### 2. Implement State Synchronization
+### 2. Using the Broadcast URL
 
-Your broadcast page needs to connect to your game's state management system:
+The most important part of implementing Cast Kit is creating a broadcast URL that will be displayed on the TV. This URL should:
 
-```typescript
-// Example connection to a game server
-function connectToGameState(gameId, roomCode) {
-  const socket = new WebSocket(`wss://triviajam.tv/api/game/${gameId}/room/${roomCode}`);
+- Be a page within your game that's designed for TV viewing
+- Accept parameters through the URL (typically gameId and roomCode)
+- Display the appropriate game content based on these parameters
+
+For example:
+```jsx
+// In your game component
+function GameUI() {
+  const gameId = "abc123";
+  const roomCode = "XYZ789";
   
-  socket.onmessage = (event) => {
-    const gameState = JSON.parse(event.data);
-    // Update UI with new game state
-    updateGameDisplay(gameState);
-  };
+  // Initialize casting
+  React.useEffect(() => {
+    castClient.signalReady({
+      gameId,
+      roomCode,
+      broadcastUrl: `https://yourgame.com/tv?gameId=${gameId}&roomCode=${roomCode}`
+    });
+  }, []);
   
-  return () => socket.close(); // Return cleanup function
+  return (
+    <div>
+      <CastButton client={castClient} />
+    </div>
+  );
 }
 ```
+
+This URL is passed to the Cast Kit library, which will load this page on the TV when casting begins. Your broadcast page simply needs to read these parameters from the URL and show the appropriate content.
 
 ### 3. Performance Optimization
 
@@ -537,9 +386,9 @@ Ensure your broadcast page performs well:
 #### Cast Button Doesn't Work
 
 - Ensure your Chromecast device is on the same network
-- Check browser compatibility (Chrome is recommended)
-- Verify that the Google Cast extension is enabled
-- Try restarting your Chromecast device
+- Check that the user is using the latest Open Game App
+- Verify that the user has granted necessary permissions
+- Try restarting the Chromecast device
 
 #### Streaming Issues
 
@@ -547,13 +396,6 @@ Ensure your broadcast page performs well:
 - Ensure your broadcast page loads correctly in a standalone browser
 - Verify WebRTC is not blocked by firewalls or security settings
 - Test with a simpler game view to isolate performance issues
-
-#### Server Integration Problems
-
-- Confirm Cloudflare Workers is properly configured
-- Verify KV namespace is correctly set up
-- Check that Workflows is enabled on your account
-- Ensure the Renderer service URL is correct
 
 #### Error Handling
 
@@ -567,36 +409,38 @@ castClient.subscribe((state) => {
     showErrorToUser(state.error.message);
   }
 });
+
+// You can also reset errors when they've been handled
+castClient.resetError();
 ```
 
 ## Limitations
 
-- **Browser Support**: Cast Kit works best in Chrome and Chrome-based browsers
-- **Cloudflare Requirement**: Server-side components require Cloudflare Workers with Workflows
+- **App Requirement**: Casting requires players to use the Open Game App
 - **Network Dependencies**: Stable network connection is required for smooth streaming
 - **WebRTC Constraints**: Performance depends on the capabilities of the broadcasting and receiving devices
 
 ## FAQ
 
+### Q: Do I need to implement my own server for casting?
+A: No. Cast Kit is a client-side only library. All server-side communication is handled through the Open Game infrastructure.
+
 ### Q: Do I need to implement my own Chromecast receiver app?
-A: No. Cast Kit uses a universal receiver that works with any game. You just need to create a broadcast page on your domain.
+A: No. Cast Kit uses the Open Game App as a bridge to Chromecast. You just need to create a broadcast page on your domain.
 
 ### Q: How do I handle player input while casting?
 A: Your game client becomes a controller when casting is active. Use your existing input handling code, but display the controller UI instead of the game UI.
 
 ### Q: Is there a cost to using Cast Kit?
-A: Cast Kit itself is free and open source. You'll need a Cloudflare Workers account (which has a generous free tier) and access to the Renderer service (which can be self-hosted or used as a service).
-
-### Q: How many concurrent cast sessions can I support?
-A: This depends on your Cloudflare Workers limits and the Renderer service capacity. The default Renderer configuration supports 50 concurrent sessions.
+A: Cast Kit itself is free and open source. Please contact Open Game system regarding usage terms.
 
 ### Q: Can I use Cast Kit with any game?
 A: Yes, Cast Kit works with any web-based game that can expose a broadcast view. Games using canvas, WebGL, or DOM-based rendering are all supported.
 
 ## Support and Community
 
-- GitHub Issues: [https://github.com/open-game-collective/cast-kit/issues](https://github.com/open-game-collective/cast-kit/issues)
-- Discord Community: [Join our Discord](https://discord.gg/opengamecollective)
+- GitHub Issues: [https://github.com/open-game-system/cast-kit/issues](https://github.com/open-game-system/cast-kit/issues)
+- Discord Community: [Join our Discord](https://discord.gg/opengamesystem)
 - Email Support: [support@triviajam.tv](mailto:support@triviajam.tv)
 
 ## License
@@ -605,4 +449,4 @@ Cast Kit is licensed under the MIT License - see the [LICENSE](LICENSE) file for
 
 ---
 
-Built with ❤️ by the [Open Game Collective](https://github.com/open-game-collective) 
+Built with ❤️ by the [Open Game Collective](https://opengame.org/collective) 
